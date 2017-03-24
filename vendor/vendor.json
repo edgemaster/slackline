@@ -1,0 +1,30 @@
+{
+	"comment": "",
+	"ignore": "test",
+	"package": [
+		{
+			"checksumSHA1": "gw+CJYMS0zWzKlXcpldTpSVquvA=",
+			"path": "github.com/codegangsta/inject",
+			"revision": "8b1a9340f98d4526c7d962e71856c2d29670db36"
+		},
+		{
+			"checksumSHA1": "QDye5HzWoUZe1zGgKI7DUS9MDGg=",
+			"comment": "v0.1-21-gb836f38",
+			"path": "github.com/codegangsta/martini",
+			"revision": "b836f3858ac3e76e09b425f7cc49bf4dcc371686"
+		},
+		{
+			"checksumSHA1": "oNrSJkPTYsPtwH9/pUXOTIjVuks=",
+			"path": "github.com/nlopes/slack",
+			"revision": "6519657c021b7add19c4ef48220140cca0b1657b",
+			"revisionTime": "2017-02-11T11:26:27Z"
+		},
+		{
+			"checksumSHA1": "7EZyXN0EmZLgGxZxK01IJua4c8o=",
+			"path": "golang.org/x/net/websocket",
+			"revision": "78ebe5c8b6a27ec13109c73c22193d618270e1e1",
+			"revisionTime": "2017-02-11T12:21:22Z"
+		}
+	],
+	"rootPath": "slackline"
+}
