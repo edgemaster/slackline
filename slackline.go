@@ -188,6 +188,8 @@ func main() {
 
 	config = GetConfiguration()
 
+        slack.SetLogger(log.New(os.Stderr, "SlackAPI:", log.LstdFlags))
+
 	router := gin.Default()
 
 	router.POST("/bridge", func(c *gin.Context) {
