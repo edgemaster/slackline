@@ -148,8 +148,9 @@ func (msg *slackMessage) FetchUserIcon() error {
 
 const postMessageURL = "https://hooks.slack.com/services"
 
-func (c Channel) WebhookPostMessage(msg *slackMessage) (err error) {
+func (c Channel) WebhookPostMessage(msg slackMessage) (err error) {
 
+        msg.Channel = c
 	team := c.GetTeam()
         url := postMessageURL+"/"+team.Id+"/"+team.IncomingToken
 
@@ -209,7 +210,7 @@ func main() {
 		msg.RewriteMentions()
 
 		msg.Forward(func(c Channel) {
-			c.WebhookPostMessage(&msg)
+			c.WebhookPostMessage(msg)
 		})
 	})
 	router.Run(":" + port)
