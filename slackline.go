@@ -5,93 +5,208 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/codegangsta/martini"
+	"github.com/gin-gonic/gin"
+	"github.com/nlopes/slack"
 	"io"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"os"
 	"regexp"
+	"strings"
 )
 
-const postMessageURL = "/services/hooks/incoming-webhook?token="
+type Team struct {
+	Id string
+	*slack.Client
+	IncomingToken string
+}
+
+func NewTeam(s string) *Team {
+	parts := strings.Split(s, ":")
+	return &Team{parts[0], slack.New(parts[1]), parts[2]}
+}
+
+type Channel struct {
+	TeamId    string
+	ChannelId string `json:"channel"`
+}
+
+func MakeChannel(s string) Channel {
+	parts := strings.Split(s, "/")
+	return Channel{parts[0], parts[1]}
+}
+
+func (c *Channel) GetTeam() *Team {
+	return config.teams[c.TeamId]
+}
+
+func (c Channel) Forward(f func(Channel)) {
+	for _, other := range config.channelMap[c] {
+		if c != other {
+			f(other)
+		}
+	}
+}
+
+type Configuration struct {
+	teams          map[string]*Team
+	channelMap     map[Channel][]Channel
+	outboundTokens map[Channel]string
+}
+
+// Configuration format:
+// SLACKLINE_TEAMS=TEAM_ID:API_TOKEN:INCOMING_TOKEN,...
+// Incoming tokens are of the format Bxxxxxxx/xxxxxxxxxxxxxxx
+//
+// SLACKLINE_CHANNEL_MAP=TID/CID:TID/CID:TID/CID,...
+// SLACKLINE_OUTBOUND_TOKENS=TID/CID:OUTGOING_TOKEN,...
+func GetConfiguration() *Configuration {
+	team_strs := strings.Split(os.Getenv("SLACKLINE_TEAMS"), ",")
+	teams := make(map[string]*Team, len(team_strs))
+
+	for _, team_str := range team_strs {
+		team := NewTeam(team_str)
+		teams[team.Id] = team
+	}
+
+	channels_strs := strings.Split(os.Getenv("SLACKLINE_CHANNEL_MAP"), ",")
+	channelMap := make(map[Channel][]Channel, len(channels_strs)*3)
+	for _, channels_str := range channels_strs {
+		channel_strs := strings.Split(channels_str, ":")
+		channels := make([]Channel, len(channel_strs))
+
+		for key, channel_str := range channel_strs {
+			channel := MakeChannel(channel_str)
+			channels[key] = channel
+
+			if _, present := channelMap[channel]; !present {
+				channelMap[channel] = channels
+			} else {
+				panic(fmt.Sprintf("%s already present in channel map configuration.", channel_str))
+			}
+		}
+	}
+
+	tokens := strings.Split(os.Getenv("SLACKLINE_OUTBOUND_TOKENS"), ",")
+	outboundTokens := make(map[Channel]string, len(tokens))
+	for _, token := range tokens {
+		parts := strings.Split(token, ":")
+		outboundTokens[MakeChannel(parts[0])] = parts[1]
+	}
+
+	return &Configuration{teams, channelMap, outboundTokens}
+}
+
+var config *Configuration
+
+func (c Channel) VerifyToken(token string) bool {
+	return config.outboundTokens[c] == token
+}
 
 type slackMessage struct {
-	Channel   string `json:"channel"`
+	Channel
 	Username  string `json:"username"`
 	Text      string `json:"text"`
+	Icon      string `json:"icon_url"`
 	LinkNames bool   `json:"link_names"`
 }
 
-func (s slackMessage) payload() io.Reader {
-	content := []byte("payload=")
+func (s *slackMessage) payload() io.Reader {
 	s.LinkNames = true
-	json, _ := json.Marshal(s)
-	content = append(content, json...)
+	content, _ := json.Marshal(s)
 	return bytes.NewReader(content)
 }
 
-var mentionRegexp = regexp.MustCompile("<@([^>]+)>")
+var mentionRegexp = regexp.MustCompile("<@[^>]+>")
 
-func (s *slackMessage) containsMention() bool {
-	return mentionRegexp.MatchString(s.Text)
+func (msg *slackMessage) RewriteMentions() {
+	text := mentionRegexp.ReplaceAllStringFunc(msg.Text, func(s string) string {
+		s = s[2 : len(s)-1]
+		if strings.Contains(s, "|") {
+			s = strings.Split(s, "|")[1]
+		} else {
+			user, err := msg.GetTeam().GetUserInfo(s)
+			if err == nil {
+				log.Printf("Unable to map %v to username: %v", s, err)
+			} else {
+				s = user.Name
+			}
+		}
+		return "@" + s
+	})
+	msg.Text = text
 }
 
-func (s slackMessage) sendTo(domain, token string) (err error) {
-	payload := s.payload()
+func (msg *slackMessage) FetchUserIcon() error {
+	userInfo, err := msg.GetTeam().GetUserInfo(msg.Username)
+	if err == nil {
+		msg.Icon = userInfo.Profile.ImageOriginal
+	}
+	return err
+}
+
+func (c Channel) WebhookPostMessage(msg *slackMessage) (err error) {
+
+	const postMessageURL = "https://hooks.slack.com/services/"
+	team := c.GetTeam()
 
 	res, err := http.Post(
-		"https://"+domain+postMessageURL+token,
-		"application/x-www-form-urlencoded",
-		payload,
+		postMessageURL+"/"+team.Id+"/"+team.IncomingToken,
+		"application/json",
+		msg.payload(),
 	)
 
 	if err != nil {
+		log.Println(err)
 		return err
 	}
 
 	if res.StatusCode != 200 {
 		defer res.Body.Close()
 		body, _ := ioutil.ReadAll(res.Body)
-		return errors.New(res.Status + " - " + string(body))
+		err := errors.New(res.Status + " - " + string(body))
+		log.Println(err)
+		return err
 	}
 
 	return
 }
 
 func main() {
-	m := martini.Classic()
-	m.Post("/bridge", func(res http.ResponseWriter, req *http.Request) {
-		username := req.PostFormValue("user_name")
-		text := req.PostFormValue("text")
+	port := os.Getenv("PORT")
+	if port == "" {
+		log.Fatal("$PORT must be set")
+	}
 
-		if username == "slackbot" {
-			// Avoid infinite loop
+	config = GetConfiguration()
+
+	router := gin.Default()
+
+	router.POST("/bridge", func(c *gin.Context) {
+		msg := slackMessage{
+			Channel:  Channel{c.PostForm("team_id"), c.PostForm("channel_id")},
+			Username: c.PostForm("user_name"),
+			Text:     c.PostForm("text"),
+		}
+
+		c.Status(200)
+
+		if !msg.VerifyToken(c.PostForm("token")) {
+			log.Printf("Incorrect webhook token: %v", c.PostForm("token"))
 			return
 		}
 
-		msg := slackMessage{
-			Username: username,
-			Text:     text,
+		if msg.Username == "slackbot" {
+			return
 		}
 
-		domain := req.URL.Query().Get("domain")
-		token := req.URL.Query().Get("token")
+		msg.FetchUserIcon()
+		msg.RewriteMentions()
 
-		if os.Getenv("DEBUG_BRIDGE") == domain {
-			fmt.Printf("Request: %v\n", req.PostForm)
-			fmt.Printf("Message: %v\n", msg)
-		}
-
-		fmt.Printf("message=received domain=%s hasMention=%v token=%s\n", domain, msg.containsMention(), token)
-
-		err := msg.sendTo(domain, token)
-
-		if err != nil {
-			fmt.Printf("message=error description=%#v\n", err.Error())
-			res.WriteHeader(500)
-		} else {
-			fmt.Println("message=sent")
-		}
+		msg.Forward(func(c Channel) {
+			c.WebhookPostMessage(&msg)
+		})
 	})
-	m.Run()
+	router.Run(":" + port)
 }
