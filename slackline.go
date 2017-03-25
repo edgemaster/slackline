@@ -24,7 +24,9 @@ type Team struct {
 
 func NewTeam(s string) *Team {
 	parts := strings.Split(s, ":")
-	return &Team{parts[0], slack.New(parts[1]), parts[2]}
+        client := slack.New(parts[1])
+        client.SetDebug(true)
+	return &Team{parts[0], client, parts[2]}
 }
 
 type Channel struct {
@@ -187,8 +189,6 @@ func main() {
 	}
 
 	config = GetConfiguration()
-
-        slack.SetLogger(log.New(os.Stderr, "SlackAPI:", log.LstdFlags))
 
 	router := gin.Default()
 
