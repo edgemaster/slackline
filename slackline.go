@@ -146,13 +146,17 @@ func (msg *slackMessage) FetchUserIcon() error {
 	return err
 }
 
+const postMessageURL = "https://hooks.slack.com/services/"
+
 func (c Channel) WebhookPostMessage(msg *slackMessage) (err error) {
 
-	const postMessageURL = "https://hooks.slack.com/services/"
 	team := c.GetTeam()
+        url := postMessageURL+"/"+team.Id+"/"+team.IncomingToken
+
+        log.Print("Posting message to %v", url)
 
 	res, err := http.Post(
-		postMessageURL+"/"+team.Id+"/"+team.IncomingToken,
+                url,
 		"application/json",
 		msg.payload(),
 	)
