@@ -127,7 +127,7 @@ func (msg *slackMessage) RewriteMentions() {
 			s = strings.Split(s, "|")[1]
 		} else {
 			user, err := msg.GetTeam().GetUserInfo(s)
-			if err == nil {
+			if err != nil {
 				log.Printf("Unable to map %v to username: %v", s, err)
 			} else {
 				s = user.Name
@@ -140,7 +140,9 @@ func (msg *slackMessage) RewriteMentions() {
 
 func (msg *slackMessage) FetchUserIcon() error {
 	userInfo, err := msg.GetTeam().GetUserInfo(msg.Username)
-	if err == nil {
+	if err != nil {
+                log.Printf("Unable to fetch user icon for %v: %v", msg.Username, err)
+        } else {
 		msg.Icon = userInfo.Profile.ImageOriginal
 	}
 	return err
