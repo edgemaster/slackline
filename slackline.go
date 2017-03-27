@@ -22,11 +22,30 @@ type Team struct {
 	IncomingToken string
 }
 
-func NewTeam(s string) *Team {
+func NewTeam(s string) (*Team, error) {
 	parts := strings.Split(s, ":")
-        client := slack.New(parts[1])
-        client.SetDebug(true)
-	return &Team{parts[0], client, parts[2]}
+	client := slack.New(parts[1])
+	client.SetDebug(true)
+	t := &Team{parts[0], client, parts[2]}
+	_, err := t.AuthTest()
+	if err != nil {
+		return nil, err
+	} else {
+		return t, nil
+	}
+}
+
+func (t *Team) AuthTest() (*slack.AuthTestResponse, error) {
+	response, error := t.Client.AuthTest()
+	if error == nil {
+		if t.Id != response.TeamID {
+			return response, fmt.Errorf("AuthTest: expected auth for team %v but got %v", t.Id, response.TeamID)
+		} else {
+			return response, nil
+		}
+	} else {
+		return nil, fmt.Errorf("Failed to construct Team %v: %v", t.Id, error)
+	}
 }
 
 type Channel struct {
@@ -68,7 +87,10 @@ func GetConfiguration() *Configuration {
 	teams := make(map[string]*Team, len(team_strs))
 
 	for _, team_str := range team_strs {
-		team := NewTeam(team_str)
+		team, err := NewTeam(team_str)
+		if err != nil {
+			log.Fatal(err)
+		}
 		teams[team.Id] = team
 	}
 
@@ -143,8 +165,8 @@ func (msg *slackMessage) RewriteMentions() {
 func (msg *slackMessage) FetchUserIcon() error {
 	userInfo, err := msg.GetTeam().GetUserInfo(msg.Username)
 	if err != nil {
-                log.Printf("Unable to fetch user icon for %v: %v", msg.Username, err)
-        } else {
+		log.Printf("Unable to fetch user icon for %v: %v", msg.Username, err)
+	} else {
 		msg.Icon = userInfo.Profile.ImageOriginal
 	}
 	return err
@@ -154,14 +176,14 @@ const postMessageURL = "https://hooks.slack.com/services"
 
 func (c Channel) WebhookPostMessage(msg slackMessage) (err error) {
 
-        msg.Channel = c
+	msg.Channel = c
 	team := c.GetTeam()
-        url := postMessageURL+"/"+team.Id+"/"+team.IncomingToken
+	url := postMessageURL + "/" + team.Id + "/" + team.IncomingToken
 
-        log.Printf("Posting message to %v", url)
+	log.Printf("Posting message to %v", url)
 
 	res, err := http.Post(
-                url,
+		url,
 		"application/json",
 		msg.payload(),
 	)
